@@ -1,5 +1,6 @@
 import os
 import csv
+import threading
 from typing import List, Tuple, Optional
 from config import (
     ATTACHMENT_FILES_DIR, ADDITIONAL_FILES_DIR, COVER_IMAGE_DIR,
@@ -16,6 +17,7 @@ class FileManager:
         self.cover_image_dir = COVER_IMAGE_DIR
         self.error_log_file = LOG_ERROR_FILE
         self.success_log_file = LOG_SUCCESS_FILE
+        self._lock = threading.Lock()  # Lock para operações thread-safe
         self._ensure_directories_exist()
 
     def _ensure_directories_exist(self):
@@ -60,7 +62,7 @@ class FileManager:
         return student_ids
 
     def get_cover_image_path(self) -> Optional[str]:
-       
+
         if not os.path.exists(self.cover_image_dir):
             print(f"Diretório de imagem de capa '{self.cover_image_dir}' não encontrado. Nenhuma imagem de capa será usada.")
             return None
@@ -70,7 +72,7 @@ class FileManager:
             if os.path.isfile(file_path) and filename.lower().endswith(VALID_COVER_IMAGE_EXTENSIONS):
                 print(f"Imagem de capa encontrada: {file_path}")
                 return file_path
-        
+
         print(f"Nenhuma imagem de capa válida {VALID_COVER_IMAGE_EXTENSIONS} encontrada em '{self.cover_image_dir}'. O comunicado será enviado sem imagem de capa.")
         return None
 
@@ -151,18 +153,20 @@ class FileManager:
         self._prepare_csv_file(self.success_log_file, CSV_SUCCESS_HEADER)
 
     def log_error(self, student_id: str, status: str):
-        try:
-            with open(self.error_log_file, mode='a', newline='', encoding='utf-8') as file:
-                writer = csv.writer(file)
-                writer.writerow([student_id, status])
-        except IOError as e:
-            print(f"Erro ao escrever no log de erros '{self.error_log_file}': {e}")
+        with self._lock:  # Thread-safe logging
+            try:
+                with open(self.error_log_file, mode='a', newline='', encoding='utf-8') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([student_id, status])
+            except IOError as e:
+                print(f"Erro ao escrever no log de erros '{self.error_log_file}': {e}")
 
 
     def log_success(self, student_id: str, student_name: str, handout_id: str):
-        try:
-            with open(self.success_log_file, mode='a', newline='', encoding='utf-8') as file:
-                writer = csv.writer(file)
-                writer.writerow([student_id, student_name, handout_id])
-        except IOError as e:
-            print(f"Erro ao escrever no log de sucessos '{self.success_log_file}': {e}")
+        with self._lock:  # Thread-safe logging
+            try:
+                with open(self.success_log_file, mode='a', newline='', encoding='utf-8') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([student_id, student_name, handout_id])
+            except IOError as e:
+                print(f"Erro ao escrever no log de sucessos '{self.success_log_file}': {e}")

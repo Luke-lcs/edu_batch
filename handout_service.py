@@ -1,17 +1,20 @@
 import time
 import os
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 from api_client import ApiClient
 from file_manager import FileManager
 from config import (
     HANDOUT_CATEGORIES_ENDPOINT, STUDENT_PROFILES_ENDPOINT,
-    HANDOUTS_ENDPOINT, API_RETRY_DELAY_SECONDS
+    HANDOUTS_ENDPOINT, API_RETRY_DELAY_SECONDS,
+    HANDOUT_STATUS_CHECK_ATTEMPTS, HANDOUT_STATUS_CHECK_DELAY
 )
 
 class HandoutService:
     def __init__(self, api_client: ApiClient, file_manager: FileManager):
         self.api_client = api_client
         self.file_manager = file_manager
+        self._lock = threading.Lock()  # Lock para operações thread-safe
 
     def list_categories(self) -> Optional[Dict]:
         print("Buscando categorias de comunicados...")
@@ -103,9 +106,6 @@ class HandoutService:
                 self.file_manager.log_error(student_id, "Nenhum arquivo preparado para envio (erro interno)")
                 return None
 
-            # Debug: mostrar o que será enviado no campo files
-            # print(f"DEBUG: files_for_api_request = {[(item[0], item[1][0]) for item in files_for_api_request]}")
-
             response_data_api = self.api_client.post(HANDOUTS_ENDPOINT, data=payload, files=files_for_api_request)
 
             if response_data_api and isinstance(response_data_api, dict) and response_data_api.get('data', {}).get(
@@ -141,7 +141,7 @@ class HandoutService:
     def approve_handout(self, handout_id: str) -> bool:
         print(f"Aprovando comunicado {handout_id}...")
         endpoint = f"{HANDOUTS_ENDPOINT}/{handout_id}/approve"
-        payload = {'approve': True} 
+        payload = {'approve': True}
 
         try:
             self.api_client.patch(endpoint, json_data=payload)
@@ -150,9 +150,45 @@ class HandoutService:
         except ConnectionError as e:
             print(f"Falha ao aprovar comunicado {handout_id}: {e}")
             return False
-        except Exception as e: 
+        except Exception as e:
             print(f"Exceção inesperada ao aprovar comunicado {handout_id}: {e}")
             return False
+
+    def check_handout_status(self, handout_id: str) -> bool:
+        """
+        Verifica se o comunicado está visível e pronto na plataforma.
+        Retorna True se o comunicado estiver pronto, False caso contrário.
+        """
+        print(f"Verificando status do comunicado {handout_id}...")
+        endpoint = f"{HANDOUTS_ENDPOINT}/{handout_id}"
+
+        try:
+            response = self.api_client.get(endpoint)
+            if response and isinstance(response, dict):
+                data = response.get('data', {})
+                attributes = data.get('attributes', {})
+
+                is_approved = attributes.get('approved', False)
+                is_visible = attributes.get('visible', False)
+
+                return is_approved and is_visible
+            return False
+        except Exception as e:
+            print(f"Erro ao verificar status do comunicado {handout_id}: {e}")
+            return False
+
+    def wait_for_handout_ready(self, handout_id: str, max_attempts: int = HANDOUT_STATUS_CHECK_ATTEMPTS, delay: int = HANDOUT_STATUS_CHECK_DELAY) -> bool:
+        """
+        Aguarda até que o comunicado esteja pronto na plataforma.
+        Versão otimizada com configurações personalizáveis.
+        """
+        for attempt in range(max_attempts):
+            if self.check_handout_status(handout_id):
+                return True
+            if attempt < max_attempts - 1:
+                print(f"Aguardando comunicado ficar pronto... Tentativa {attempt + 1}/{max_attempts}")
+                time.sleep(delay)
+        return False
 
     def process_student_handout(self, student_id: str, title: str, description: str,
                                 send_to: str, category_id: str, cover_image_path: Optional[str]):
@@ -164,18 +200,15 @@ class HandoutService:
             error_msg = "Aluno não encontrado na API ou sem sala de aula associada."
             if student_info and student_info[1] is None:
                 error_msg = f"Aluno '{student_info[0]}' encontrado, mas não está associado a nenhuma sala de aula."
-            
+
             print(error_msg)
             self.file_manager.log_error(student_id, error_msg)
             return
 
         student_name: str = student_info[0]
-        classroom_id: int = student_info[1] 
-             
-        print(f"Aluno: {student_name}, Sala ID: {classroom_id}")
+        classroom_id: int = student_info[1]
 
-        print(f"Aguardando {API_RETRY_DELAY_SECONDS}s antes de criar o comunicado...")
-        time.sleep(API_RETRY_DELAY_SECONDS)
+        print(f"Aluno: {student_name}, Sala ID: {classroom_id}")
 
         handout_id = self.create_handout(
             student_id, classroom_id, title, description,
@@ -183,10 +216,10 @@ class HandoutService:
         )
 
         if handout_id:
-            print(f"Aguardando {API_RETRY_DELAY_SECONDS}s antes de aprovar o comunicado...")
-            time.sleep(API_RETRY_DELAY_SECONDS)
             if self.approve_handout(handout_id):
-                self.file_manager.log_success(student_id, student_name, handout_id)
+                if self.wait_for_handout_ready(handout_id):
+                    self.file_manager.log_success(student_id, student_name, handout_id)
+                else:
+                    self.file_manager.log_error(student_id, f"Comunicado ID: {handout_id} não ficou pronto após aprovação (Nome: {student_name})")
             else:
                 self.file_manager.log_error(student_id, f"Falha ao aprovar o comunicado ID: {handout_id} (Nome: {student_name})")
-                

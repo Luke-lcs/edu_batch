@@ -3,6 +3,9 @@ from api_auth import Authenticator
 from api_client import ApiClient
 from file_manager import FileManager
 from handout_service import HandoutService
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from config import MAX_CONCURRENT_THREADS, BATCH_SIZE
 
 def main():
     print("=== Sistema de Envio de Comunicados Agenda Edu===\n")
@@ -59,7 +62,6 @@ def main():
     else:
         print("Continuando sem imagem de capa para os comunicados.")
 
-
     # 10. Confirmar Operação
     if not user_interaction.confirm_send_operation(
         len(student_ids),
@@ -70,12 +72,20 @@ def main():
         print("Operação cancelada pelo usuário.")
         return
 
-    # 11. Processar Comunicados para cada Aluno
-    print(f"\nIniciando o envio de {len(student_ids)} comunicados...")
+    # 11. Processar Comunicados em Paralelo
+    print(f"\nIniciando o envio de {len(student_ids)} comunicados em paralelo...")
+
+    # Configurar número de workers baseado nas configurações
+    max_workers = min(MAX_CONCURRENT_THREADS, len(student_ids))
+    print(f"Usando {max_workers} threads para processamento paralelo")
+
     envios_sucesso = 0
     envios_falha = 0
 
-    for student_id in student_ids:
+    # Lock para operações thread-safe
+    lock = threading.Lock()
+
+    def process_student(student_id):
         try:
             handout_svc.process_student_handout(
                 student_id,
@@ -85,13 +95,34 @@ def main():
                 selected_category_id,
                 cover_image_file_path
             )
+            with lock:
+                nonlocal envios_sucesso
+                envios_sucesso += 1
         except Exception as e:
-            print(f"Erro crítico não tratado ao processar o aluno {student_id} no loop principal: {e}")
-            file_mgr.log_error(student_id, f"Erro crítico no main loop: {e}")
-            envios_falha +=1
+            print(f"Erro crítico não tratado ao processar o aluno {student_id}: {e}")
+            file_mgr.log_error(student_id, f"Erro crítico no processamento paralelo: {e}")
+            with lock:
+                nonlocal envios_falha
+                envios_falha += 1
 
+    # Executar processamento paralelo
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submeter todas as tarefas
+        future_to_student = {
+            executor.submit(process_student, student_id): student_id
+            for student_id in student_ids
+        }
+
+        # Processar resultados conforme completam
+        for future in as_completed(future_to_student):
+            student_id = future_to_student[future]
+            try:
+                future.result()  # Isso vai capturar qualquer exceção
+            except Exception as e:
+                print(f"Erro inesperado no processamento do aluno {student_id}: {e}")
 
     print("\n--- Processamento Concluído ---")
+    print(f"Sucessos: {envios_sucesso}, Falhas: {envios_falha}")
     print(f"Verifique os arquivos '{file_mgr.success_log_file}' e '{file_mgr.error_log_file}' para o status detalhado de cada envio.")
 
 if __name__ == "__main__":
