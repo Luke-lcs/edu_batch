@@ -1,4 +1,5 @@
 import requests
+import threading
 import time
 from config import BASE_URL_AUTH, TOKEN_ENDPOINT, REQUEST_TIMEOUT_SECONDS
 
@@ -10,8 +11,10 @@ class Authenticator:
         self._token_expires_at_timestamp: float = 0.0
         self._expires_in_duration: int = 0
         self._created_at_timestamp: float = 0.0
+        self._lock = threading.Lock()
 
     def _authenticate(self) -> bool:
+        # Note: This method should be called within a lock context
         url = f'{BASE_URL_AUTH}{TOKEN_ENDPOINT}'
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         data = {
@@ -61,33 +64,18 @@ class Authenticator:
             return False
 
     def get_token(self) -> str | None:
-        if not self._token or not self._token_expires_at_timestamp:
-            print("Nenhum token existente ou informações de expiração. Tentando autenticar...")
-            if not self._authenticate():
-                return None
-            return self._token
+        with self._lock:
+            current_timestamp = time.time()
+            
+            # Check if token exists and is valid (with a 30s buffer)
+            if self._token and self._token_expires_at_timestamp > (current_timestamp + 30):
+                return self._token
 
-        current_timestamp = time.time()
-        time_remaining_seconds = self._token_expires_at_timestamp - current_timestamp
-        
-        # Log do tempo restante para depuração
-        # print(f"DEBUG: Tempo restante para expiração do token: {time_remaining_seconds:.2f} segundos.")
-
-        if time_remaining_seconds <= 25: # Limite de 25 segundos
-            if time_remaining_seconds > 0: # Ainda válido, mas dentro da janela crítica
-                wait_time = time_remaining_seconds
-                print(f"Token atual expira em {wait_time:.2f} segundos (dentro da janela crítica de 25s).")
-                print(f"Aguardando {wait_time + 1:.2f} segundos para a expiração completa do token atual...")
-                time.sleep(wait_time + 1) # Espera o tempo restante + 1 segundo de margem
-            else:
-                print("Token atual já expirou.")
-
-            print("Solicitando renovação do token...")
-            if not self._authenticate():
-                print("Falha ao renovar o token.")
-                return None
-
-        return self._token
+            print("Token expirado ou próximo da expiração. Renovando...")
+            if self._authenticate():
+                return self._token
+            
+            return None
 
     def try_auth(self) -> bool:
         return self.get_token() is not None

@@ -1,6 +1,7 @@
 import os
 import csv
 import threading
+import logging
 from typing import List, Tuple, Optional
 from config import (
     ATTACHMENT_FILES_DIR, ADDITIONAL_FILES_DIR, COVER_IMAGE_DIR,
@@ -19,6 +20,29 @@ class FileManager:
         self.success_log_file = LOG_SUCCESS_FILE
         self._lock = threading.Lock()  # Lock para operações thread-safe
         self._ensure_directories_exist()
+        self.logger = self._setup_logging()
+
+    def _setup_logging(self):
+        logger = logging.getLogger('EduBatch')
+        logger.setLevel(logging.INFO)
+        
+        # Avoid adding handlers multiple times
+        if not logger.handlers:
+            # File Handler
+            file_handler = logging.FileHandler('app.log')
+            file_handler.setLevel(logging.INFO)
+            file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(file_formatter)
+            logger.addHandler(file_handler)
+
+            # Console Handler
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_formatter = logging.Formatter('%(message)s') # Simpler format for console
+            console_handler.setFormatter(console_formatter)
+            logger.addHandler(console_handler)
+        
+        return logger
 
     def _ensure_directories_exist(self):
         for dir_path in [self.attachment_dir, self.cover_image_dir, self.additional_files_dir]:
@@ -153,20 +177,22 @@ class FileManager:
         self._prepare_csv_file(self.success_log_file, CSV_SUCCESS_HEADER)
 
     def log_error(self, student_id: str, status: str):
+        self.logger.error(f"Erro [Aluno: {student_id}]: {status}")
         with self._lock:  # Thread-safe logging
             try:
                 with open(self.error_log_file, mode='a', newline='', encoding='utf-8') as file:
                     writer = csv.writer(file)
                     writer.writerow([student_id, status])
             except IOError as e:
-                print(f"Erro ao escrever no log de erros '{self.error_log_file}': {e}")
+                self.logger.error(f"Erro ao escrever no log de erros '{self.error_log_file}': {e}")
 
 
     def log_success(self, student_id: str, student_name: str, handout_id: str):
+        self.logger.info(f"Sucesso [Aluno: {student_id}]: Comunicado {handout_id} enviado.")
         with self._lock:  # Thread-safe logging
             try:
                 with open(self.success_log_file, mode='a', newline='', encoding='utf-8') as file:
                     writer = csv.writer(file)
                     writer.writerow([student_id, student_name, handout_id])
             except IOError as e:
-                print(f"Erro ao escrever no log de sucessos '{self.success_log_file}': {e}")
+                self.logger.error(f"Erro ao escrever no log de sucessos '{self.success_log_file}': {e}")

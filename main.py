@@ -1,3 +1,5 @@
+import argparse
+import sys
 import user_interaction
 from api_auth import Authenticator
 from api_client import ApiClient
@@ -6,8 +8,9 @@ from handout_service import HandoutService
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from config import MAX_CONCURRENT_THREADS, BATCH_SIZE
+import utils
 
-def main():
+def command_send():
     print("=== Sistema de Envio de Comunicados Agenda Edu===\n")
 
     # 0. Inicializar gerenciador de arquivos (cria pastas e logs se necessário)
@@ -124,6 +127,41 @@ def main():
     print("\n--- Processamento Concluído ---")
     print(f"Sucessos: {envios_sucesso}, Falhas: {envios_falha}")
     print(f"Verifique os arquivos '{file_mgr.success_log_file}' e '{file_mgr.error_log_file}' para o status detalhado de cada envio.")
+
+def main():
+    parser = argparse.ArgumentParser(description="Edu Batch - Ferramenta de Automação Agenda Edu")
+    subparsers = parser.add_subparsers(dest="command", help="Comandos disponíveis")
+
+    # Comando: send (padrão)
+    parser_send = subparsers.add_parser("send", help="Enviar comunicados em lote")
+
+    # Comando: rename
+    parser_rename = subparsers.add_parser("rename", help="Renomear arquivos removendo sufixos (ex: '123 - Nome' -> '123')")
+    parser_rename.add_argument("--dir", default="files_to_send", help="Diretório alvo")
+
+    # Comando: map-rename
+    parser_map = subparsers.add_parser("map-rename", help="Renomear arquivos baseado em CSV (De/Para)")
+    parser_map.add_argument("--csv", default="./files_to_send.csv", help="Caminho do CSV")
+    parser_map.add_argument("--dir", default="files_to_send", help="Diretório alvo")
+
+    # Comando: cleanup
+    parser_cleanup = subparsers.add_parser("cleanup", help="Apagar arquivos já enviados (baseado no log de sucesso)")
+    parser_cleanup.add_argument("--csv", default="Comunicados_Enviados.csv", help="Caminho do CSV de log")
+    parser_cleanup.add_argument("--dir", default="attachment_files", help="Diretório alvo")
+    parser_cleanup.add_argument("--dry-run", action="store_true", help="Simular sem apagar")
+
+    args = parser.parse_args()
+
+    if args.command == "send" or args.command is None:
+        command_send()
+    elif args.command == "rename":
+        utils.rename_files_in_directory(args.dir)
+    elif args.command == "map-rename":
+        utils.rename_files_with_csv(args.csv, args.dir)
+    elif args.command == "cleanup":
+        utils.delete_sent_files(args.csv, args.dir, args.dry_run)
+    else:
+        parser.print_help()
 
 if __name__ == "__main__":
     main()

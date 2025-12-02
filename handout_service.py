@@ -14,7 +14,6 @@ class HandoutService:
     def __init__(self, api_client: ApiClient, file_manager: FileManager):
         self.api_client = api_client
         self.file_manager = file_manager
-        self._lock = threading.Lock()  # Lock para operações thread-safe
 
     def list_categories(self) -> Optional[Dict]:
         print("Buscando categorias de comunicados...")
