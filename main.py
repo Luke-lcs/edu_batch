@@ -7,8 +7,9 @@ from file_manager import FileManager
 from handout_service import HandoutService
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
-from config import MAX_CONCURRENT_THREADS, BATCH_SIZE
+from config import MAX_CONCURRENT_THREADS
 import utils
+from tqdm import tqdm
 
 def command_send():
     print("=== Sistema de Envio de Comunicados Agenda Edu===\n")
@@ -80,7 +81,7 @@ def command_send():
 
     # Configurar número de workers baseado nas configurações
     max_workers = min(MAX_CONCURRENT_THREADS, len(student_ids))
-    print(f"Usando {max_workers} threads para processamento paralelo")
+    print(f"Usando {max_workers} threads para processamento paralelo\n")
 
     envios_sucesso = 0
     envios_falha = 0
@@ -108,7 +109,7 @@ def command_send():
                 nonlocal envios_falha
                 envios_falha += 1
 
-    # Executar processamento paralelo
+    # Executar processamento paralelo com progress bar
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submeter todas as tarefas
         future_to_student = {
@@ -116,13 +117,16 @@ def command_send():
             for student_id in student_ids
         }
 
-        # Processar resultados conforme completam
-        for future in as_completed(future_to_student):
-            student_id = future_to_student[future]
-            try:
-                future.result()  # Isso vai capturar qualquer exceção
-            except Exception as e:
-                print(f"Erro inesperado no processamento do aluno {student_id}: {e}")
+        # Processar resultados conforme completam com barra de progresso
+        with tqdm(total=len(student_ids), desc="Enviando comunicados", unit="aluno") as pbar:
+            for future in as_completed(future_to_student):
+                student_id = future_to_student[future]
+                try:
+                    future.result()  # Isso vai capturar qualquer exceção
+                except Exception as e:
+                    print(f"Erro inesperado no processamento do aluno {student_id}: {e}")
+                finally:
+                    pbar.update(1)
 
     print("\n--- Processamento Concluído ---")
     print(f"Sucessos: {envios_sucesso}, Falhas: {envios_falha}")

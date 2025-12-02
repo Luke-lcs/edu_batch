@@ -63,7 +63,7 @@ class FileManager:
     def get_student_ids_from_attachments(self) -> List[str]:
         student_ids = []
         if not os.path.exists(self.attachment_dir):
-            print(f"Diretório de anexos '{self.attachment_dir}' não encontrado.")
+            self.logger.warning(f"Diretório de anexos '{self.attachment_dir}' não encontrado.")
             return student_ids
 
         for filename in os.listdir(self.attachment_dir):
@@ -76,12 +76,19 @@ class FileManager:
                 file_size = os.path.getsize(file_path)
                 if file_size <= MAX_FILE_SIZE_BYTES:
                     student_id = os.path.splitext(filename)[0]
+                    
+                    # Validate that student_id is a numeric integer
+                    if not student_id.isdigit():
+                        self.logger.warning(f"Arquivo '{filename}' ignorado: ID '{student_id}' não é um número inteiro válido.")
+                        continue
+                    
                     student_ids.append(student_id)
                 else:
-                    print(f"Arquivo '{filename}' ({file_size / (1024*1024):.2f}MB) excede o limite de {MAX_FILE_SIZE_BYTES / (1024*1024):.0f}MB e será ignorado.")
+                    self.logger.warning(f"Arquivo '{filename}' ({file_size / (1024*1024):.2f}MB) excede o limite de {MAX_FILE_SIZE_BYTES / (1024*1024):.0f}MB e será ignorado.")
             else:
-                print(f"Arquivo '{filename}' com extensão inválida ('{file_ext}'), será ignorado. Válidas: {VALID_ATTACHMENT_EXTENSIONS}")
+                self.logger.warning(f"Arquivo '{filename}' com extensão inválida ('{file_ext}'), será ignorado. Válidas: {VALID_ATTACHMENT_EXTENSIONS}")
 
+        self.logger.info(f"Encontrados {len(student_ids)} arquivos de anexo válidos.")
         print(f"Encontrados {len(student_ids)} arquivos de anexo válidos.")
         return student_ids
 

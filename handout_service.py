@@ -1,6 +1,6 @@
 import time
 import os
-import threading
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 from api_client import ApiClient
 from file_manager import FileManager
@@ -14,17 +14,18 @@ class HandoutService:
     def __init__(self, api_client: ApiClient, file_manager: FileManager):
         self.api_client = api_client
         self.file_manager = file_manager
+        self.logger = logging.getLogger('EduBatch')
 
     def list_categories(self) -> Optional[Dict]:
-        print("Buscando categorias de comunicados...")
+        self.logger.info("Buscando categorias de comunicados...")
         try:
             return self.api_client.get(HANDOUT_CATEGORIES_ENDPOINT)
         except ConnectionError as e:
-            print(f"Falha ao buscar categorias: {e}")
+            self.logger.error(f"Falha ao buscar categorias: {e}")
             return None
 
     def get_student_classroom_info(self, student_id: str) -> Optional[Tuple[str, Optional[int]]]:
-        print(f"Buscando informações do aluno {student_id}...")
+        self.logger.info(f"Buscando informações do aluno {student_id}...")
         endpoint = f"{STUDENT_PROFILES_ENDPOINT}/{str(student_id).strip()}"
         response_data = None
         try:
@@ -36,21 +37,21 @@ class HandoutService:
                     highest_classroom_id = max(int(classroom['id']) for classroom in classrooms_data)
                     return student_name, highest_classroom_id
                 else:
-                    print(f"Aluno {student_id} ('{student_name}') não está associado a nenhuma sala.")
+                    self.logger.warning(f"Aluno {student_id} ('{student_name}') não está associado a nenhuma sala.")
                     return student_name, None
             else:
-                print(f"Resposta inesperada da API ao buscar aluno {student_id}: {response_data}")
+                self.logger.error(f"Resposta inesperada da API ao buscar aluno {student_id}: {response_data}")
                 return None
         except ConnectionError as e:
-            print(f"Erro de conexão ao buscar informações do aluno {student_id}: {e}")
+            self.logger.error(f"Erro de conexão ao buscar informações do aluno {student_id}: {e}")
             return None
         except (KeyError, TypeError, ValueError) as e:
-            print(f"Erro ao processar dados do aluno {student_id} da resposta da API: {e}. Resposta: {response_data}")
+            self.logger.error(f"Erro ao processar dados do aluno {student_id} da resposta da API: {e}. Resposta: {response_data}")
             return None
 
     def create_handout(self, student_id: str, classroom_id: int, title: str, description: str,
                        send_to: str, category_id: str, cover_image_path: Optional[str]) -> Optional[str]:
-        print(f"Criando comunicado para o aluno {student_id}...")
+        self.logger.info(f"Criando comunicado para o aluno {student_id}...")
 
         student_attachment_info = self.file_manager.get_attachment_file_for_student(student_id)
         if not student_attachment_info:
@@ -97,11 +98,11 @@ class HandoutService:
                         ('coverImage', (os.path.basename(cover_image_path), cover_file_object, cover_mime_type))
                     )
                 else:
-                    print(
+                    self.logger.warning(
                         f"Não foi possível determinar o tipo MIME para a imagem de capa: {cover_image_path}. O comunicado será enviado sem imagem de capa.")
 
             if not files_for_api_request:
-                print(f"Erro crítico: Nenhum arquivo preparado para envio para o aluno {student_id}")
+                self.logger.error(f"Erro crítico: Nenhum arquivo preparado para envio para o aluno {student_id}")
                 self.file_manager.log_error(student_id, "Nenhum arquivo preparado para envio (erro interno)")
                 return None
 
@@ -110,23 +111,23 @@ class HandoutService:
             if response_data_api and isinstance(response_data_api, dict) and response_data_api.get('data', {}).get(
                     'id'):
                 handout_id = response_data_api['data']['id']
-                print(f"Comunicado criado com sucesso para o aluno {student_id}. ID: {handout_id}")
+                self.logger.info(f"Comunicado criado com sucesso para o aluno {student_id}. ID: {handout_id}")
                 return str(handout_id)
             else:
-                print(f"Erro ao criar comunicado para {student_id}. Resposta da API: {response_data_api}")
+                self.logger.error(f"Erro ao criar comunicado para {student_id}. Resposta da API: {response_data_api}")
                 self.file_manager.log_error(student_id,
                                             f"Falha na criação do comunicado. API Respondeu: {response_data_api}")
                 return None
         except FileNotFoundError as fnf_err:
-            print(f"Erro de arquivo não encontrado ao preparar comunicado para {student_id}: {fnf_err}")
+            self.logger.error(f"Erro de arquivo não encontrado ao preparar comunicado para {student_id}: {fnf_err}")
             self.file_manager.log_error(student_id, f"Arquivo não encontrado durante preparação: {fnf_err.filename}")
             return None
         except ConnectionError as e:
-            print(f"Erro de conexão ao criar comunicado para {student_id}: {e}")
+            self.logger.error(f"Erro de conexão ao criar comunicado para {student_id}: {e}")
             self.file_manager.log_error(student_id, f"Falha na criação do comunicado devido a erro na API: {e}")
             return None
         except Exception as e:
-            print(f"Exceção inesperada ao criar comunicado para {student_id}: {e}")
+            self.logger.error(f"Exceção inesperada ao criar comunicado para {student_id}: {e}")
             self.file_manager.log_error(student_id, f"Exceção inesperada na criação: {e}")
             return None
         finally:
@@ -135,22 +136,22 @@ class HandoutService:
                     try:
                         f_obj.close()
                     except Exception as e_close:
-                        print(f"Aviso: Erro ao fechar arquivo no finally: {e_close}")
+                        self.logger.warning(f"Aviso: Erro ao fechar arquivo no finally: {e_close}")
 
     def approve_handout(self, handout_id: str) -> bool:
-        print(f"Aprovando comunicado {handout_id}...")
+        self.logger.info(f"Aprovando comunicado {handout_id}...")
         endpoint = f"{HANDOUTS_ENDPOINT}/{handout_id}/approve"
         payload = {'approve': True}
 
         try:
             self.api_client.patch(endpoint, json_data=payload)
-            print(f"Comunicado {handout_id} aprovado com sucesso.")
+            self.logger.info(f"Comunicado {handout_id} aprovado com sucesso.")
             return True
         except ConnectionError as e:
-            print(f"Falha ao aprovar comunicado {handout_id}: {e}")
+            self.logger.error(f"Falha ao aprovar comunicado {handout_id}: {e}")
             return False
         except Exception as e:
-            print(f"Exceção inesperada ao aprovar comunicado {handout_id}: {e}")
+            self.logger.error(f"Exceção inesperada ao aprovar comunicado {handout_id}: {e}")
             return False
 
     def check_handout_status(self, handout_id: str) -> bool:
@@ -158,7 +159,7 @@ class HandoutService:
         Verifica se o comunicado está visível e pronto na plataforma.
         Retorna True se o comunicado estiver pronto, False caso contrário.
         """
-        print(f"Verificando status do comunicado {handout_id}...")
+        self.logger.info(f"Verificando status do comunicado {handout_id}...")
         endpoint = f"{HANDOUTS_ENDPOINT}/{handout_id}"
 
         try:
@@ -173,7 +174,7 @@ class HandoutService:
                 return is_approved and is_visible
             return False
         except Exception as e:
-            print(f"Erro ao verificar status do comunicado {handout_id}: {e}")
+            self.logger.error(f"Erro ao verificar status do comunicado {handout_id}: {e}")
             return False
 
     def wait_for_handout_ready(self, handout_id: str, max_attempts: int = HANDOUT_STATUS_CHECK_ATTEMPTS, delay: int = HANDOUT_STATUS_CHECK_DELAY) -> bool:
@@ -185,13 +186,13 @@ class HandoutService:
             if self.check_handout_status(handout_id):
                 return True
             if attempt < max_attempts - 1:
-                print(f"Aguardando comunicado ficar pronto... Tentativa {attempt + 1}/{max_attempts}")
+                self.logger.info(f"Aguardando comunicado ficar pronto... Tentativa {attempt + 1}/{max_attempts}")
                 time.sleep(delay)
         return False
 
     def process_student_handout(self, student_id: str, title: str, description: str,
                                 send_to: str, category_id: str, cover_image_path: Optional[str]):
-        print(f"\n--- Iniciando processamento para o aluno {student_id} ---")
+        self.logger.info(f"\n--- Iniciando processamento para o aluno {student_id} ---")
 
         student_info = self.get_student_classroom_info(student_id)
         if not student_info or student_info[1] is None:
@@ -200,14 +201,14 @@ class HandoutService:
             if student_info and student_info[1] is None:
                 error_msg = f"Aluno '{student_info[0]}' encontrado, mas não está associado a nenhuma sala de aula."
 
-            print(error_msg)
+            self.logger.error(error_msg)
             self.file_manager.log_error(student_id, error_msg)
             return
 
         student_name: str = student_info[0]
         classroom_id: int = student_info[1]
 
-        print(f"Aluno: {student_name}, Sala ID: {classroom_id}")
+        self.logger.info(f"Aluno: {student_name}, Sala ID: {classroom_id}")
 
         handout_id = self.create_handout(
             student_id, classroom_id, title, description,

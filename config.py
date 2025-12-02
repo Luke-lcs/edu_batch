@@ -24,7 +24,6 @@ API_RETRY_DELAY_SECONDS = 2
 MAX_CONCURRENT_THREADS = 10  # Número máximo de threads simultâneas
 HANDOUT_STATUS_CHECK_ATTEMPTS = 5  # Tentativas para verificar status do comunicado
 HANDOUT_STATUS_CHECK_DELAY = 0.5  # Delay entre verificações de status (segundos)
-BATCH_SIZE = 50  # Tamanho do lote para processamento em grupos
 
 # CSV headers
 CSV_ERROR_HEADER = ["ID", "Status"]
