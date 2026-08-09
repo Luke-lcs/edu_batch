@@ -36,6 +36,25 @@ TOKEN_EXPIRY_BUFFER_SECONDS = 120
 API_MAX_REQUESTS_PER_SECOND = 8.0
 MAX_CONCURRENT_THREADS = 10  # Número máximo de threads simultâneas
 
+# --- Janela entre criar e aprovar o comunicado ---------------------------
+# A criação do comunicado é finalizada por um job em background. Aprovar antes
+# de o job terminar deixa o comunicado aprovado no banco mas NUNCA publicado
+# nem notificado pelo aplicativo — e sem erro nenhum. Por isso a aprovação
+# só acontece depois desta janela.
+HANDOUT_CREATION_MIN_WAIT_SECONDS = 3.0    # Piso: sempre aguardado antes de aprovar
+HANDOUT_CREATION_MAX_WAIT_SECONDS = 120.0  # Teto da espera pela confirmação
+HANDOUT_CREATION_POLL_INTERVAL_SECONDS = 2.0
+
+# Como confirmar que o job de criação terminou, consultando GET /handouts/{id}.
+# Com HANDOUT_READY_FIELD = None a ferramenta não consulta e apenas aguarda o
+# piso acima antes de aprovar (comportamento original, baseado só em tempo).
+# Preenchendo o campo e os valores de "pronto", a espera passa a ser precisa:
+# aprova assim que o job terminar e nunca aprova antes disso.
+# Ex.: HANDOUT_READY_FIELD = 'status'
+#      HANDOUT_READY_VALUES = ('created', 'pending_approval')
+HANDOUT_READY_FIELD = None
+HANDOUT_READY_VALUES = ()
+
 # CSV headers
 CSV_ERROR_HEADER = ["ID", "Status"]
 CSV_SUCCESS_HEADER = ["ID do Aluno", "Nome do Aluno", "ID do Comunicado"]

@@ -72,9 +72,14 @@ python main.py
 3. Escolha a Categoria e o Público Alvo (Alunos/Responsáveis).
 4. Confirme o envio.
 
-O comando termina quando os comunicados foram criados e aprovados. A **publicação
-é feita em background pela Agenda Edu**, com tempo de fila variável — por isso o
-envio não espera por ela. Use o `verify` depois para confirmar.
+**Sobre o processamento em background:** a Agenda Edu finaliza a criação do
+comunicado num job assíncrono. Aprovar antes de esse job terminar deixa o
+comunicado aprovado no banco mas **nunca publicado nem notificado pelo
+aplicativo**, e sem erro nenhum. Por isso a ferramenta espera entre criar e
+aprovar — veja `Janela entre criar e aprovar` nas configurações avançadas.
+
+A publicação em si também é assíncrona, e essa o envio não espera. Use o
+`verify` depois para confirmar o que já saiu.
 
 ### 2. Verificar Publicação (`verify`)
 Relê o `Comunicados_Enviados.csv` e consulta na API quais comunicados já foram
@@ -135,6 +140,7 @@ python main.py map-rename --csv files_to_send.csv
 - **Arquivo não encontrado**: Certifique-se de que o arquivo na pasta `attachment_files` tem **exatamente** o ID do aluno como nome (ex: `10.pdf` para o aluno de ID 10).
 - **Rate Limit**: A vazão é limitada por `API_MAX_REQUESTS_PER_SECOND` (não pelo número de threads). Se ainda houver erros 429, reduza esse valor.
 - **Comunicado não aparece na plataforma**: A publicação é assíncrona. Rode `python main.py verify` para ver se ainda está na fila de processamento.
+- **Comunicado aprovado que nunca chegou aos responsáveis**: Sinal de que a aprovação aconteceu antes de o job de criação terminar. Aumente `HANDOUT_CREATION_MIN_WAIT_SECONDS` ou, melhor, configure `HANDOUT_READY_FIELD`.
 
 ## ⚙️ Configurações avançadas (`config.py`)
 
@@ -145,6 +151,30 @@ python main.py map-rename --csv files_to_send.csv
 - `REQUEST_TIMEOUT_SECONDS`: Timeout das requisições. Aumente se ocorrerem erros de `Read timed out` em rede lenta ou com arquivos muito grandes.
 - `TOKEN_EXPIRY_BUFFER_SECONDS`: Margem de segurança para renovar o token antes de expirar. Deve ser maior que `REQUEST_TIMEOUT_SECONDS`.
 - `VALID_ATTACHMENT_EXTENSIONS` / `VALID_COVER_IMAGE_EXTENSIONS`: Extensões permitidas.
+
+### Janela entre criar e aprovar
+
+Aprovar um comunicado antes de o job de criação terminar é uma falha
+silenciosa: ele fica aprovado no banco e nunca é enviado. A ferramenta tem dois
+modos para evitar isso.
+
+**Por tempo (padrão).** Com `HANDOUT_READY_FIELD = None`, espera
+`HANDOUT_CREATION_MIN_WAIT_SECONDS` (padrão 3s) e aprova. Não consulta a API,
+então não gasta orçamento de req/s — mas é um chute sobre a duração do job.
+
+**Por confirmação (recomendado).** Preenchendo o campo da resposta de
+`GET /handouts/{id}` que indica job concluído, a espera passa a ser exata:
+
+```python
+HANDOUT_READY_FIELD = 'status'
+HANDOUT_READY_VALUES = ('created', 'pending_approval')
+```
+
+A ferramenta aguarda o piso, consulta a cada `HANDOUT_CREATION_POLL_INTERVAL_SECONDS`
+e aprova assim que o job terminar. Se estourar `HANDOUT_CREATION_MAX_WAIT_SECONDS`
+sem confirmar, **não aprova** e registra o ID no `Erros.csv` para aprovação
+manual — um comunicado não aprovado é visível e corrigível; um aprovado sem ser
+enviado, não.
 
 ### Política de retentativas
 

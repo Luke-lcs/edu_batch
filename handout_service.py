@@ -1,11 +1,15 @@
 import os
+import time
 from typing import Dict, Optional, Tuple
 from api_client import ApiClient
 from file_manager import FileManager
 from logging_config import get_logger
 from config import (
     HANDOUT_CATEGORIES_ENDPOINT, STUDENT_PROFILES_ENDPOINT,
-    HANDOUTS_ENDPOINT
+    HANDOUTS_ENDPOINT,
+    HANDOUT_CREATION_MIN_WAIT_SECONDS, HANDOUT_CREATION_MAX_WAIT_SECONDS,
+    HANDOUT_CREATION_POLL_INTERVAL_SECONDS,
+    HANDOUT_READY_FIELD, HANDOUT_READY_VALUES
 )
 
 # Campos que a API deve devolver para que o status do comunicado seja verificável.
@@ -166,22 +170,9 @@ class HandoutService:
         transforme todo envio bem-sucedido em erro no relatório.
         """
         self.logger.info(f"Verificando status do comunicado {handout_id}...")
-        endpoint = f"{HANDOUTS_ENDPOINT}/{handout_id}"
 
-        try:
-            response = self.api_client.get(endpoint)
-        except Exception as e:
-            self.logger.warning(f"Não foi possível verificar o status do comunicado {handout_id}: {e}")
-            return None
-
-        if not isinstance(response, dict):
-            self.logger.warning(f"Resposta inesperada ao verificar o comunicado {handout_id}: {response}")
-            return None
-
-        data = response.get('data')
-        attributes = data.get('attributes') if isinstance(data, dict) else None
-        if not isinstance(attributes, dict):
-            self.logger.warning(f"Resposta sem 'data.attributes' ao verificar o comunicado {handout_id}: {response}")
+        attributes = self._get_handout_attributes(handout_id)
+        if attributes is None:
             return None
 
         if not HANDOUT_STATUS_FIELDS.intersection(attributes.keys()):
@@ -221,17 +212,112 @@ class HandoutService:
             # create_handout já registrou o motivo em Erros.csv.
             return False
 
+        # Aprovar antes de o job de criação terminar deixa o comunicado
+        # aprovado no banco mas nunca publicado nem notificado — falha
+        # silenciosa. Só aprova depois desta janela.
+        criado = self.wait_for_handout_created(handout_id)
+        if criado is False:
+            self.file_manager.log_error(
+                student_id,
+                f"Comunicado ID: {handout_id} não terminou o processamento em "
+                f"{HANDOUT_CREATION_MAX_WAIT_SECONDS:.0f}s e NÃO foi aprovado, para não ser aprovado "
+                f"sem ser enviado. Aprove manualmente depois de confirmar na plataforma (Nome: {student_name})"
+            )
+            return False
+
+        if criado is None:
+            self.logger.warning(
+                f"Sem como confirmar que o processamento do comunicado {handout_id} terminou; "
+                f"aprovando após a espera fixa de {HANDOUT_CREATION_MIN_WAIT_SECONDS:.0f}s "
+                f"(aluno {student_id} - {student_name})."
+            )
+
         if not self.approve_handout(handout_id):
             self.file_manager.log_error(student_id, f"Falha ao aprovar o comunicado ID: {handout_id} (Nome: {student_name})")
             return False
 
-        # O envio termina aqui de propósito. A publicação do comunicado é feita
-        # em background pela Agenda Edu (Sidekiq), com tempo de fila variável:
-        # esperar por ela dentro do lote atrasaria o envio, consumiria o
-        # orçamento de rps com polling e marcaria como falha um comunicado que
-        # só está na fila. A confirmação fica a cargo do comando `verify`.
+        # A publicação e a notificação também são feitas em background, com
+        # tempo de fila variável. Esperar por elas aqui atrasaria o lote e
+        # marcaria como falha um comunicado que só está na fila — essa
+        # confirmação fica a cargo do comando `verify`.
         self.file_manager.log_success(student_id, student_name, handout_id)
         return True
+
+    def _get_handout_attributes(self, handout_id: str) -> Optional[Dict]:
+        """Busca data.attributes do comunicado. None quando não foi possível obter."""
+        try:
+            response = self.api_client.get(f"{HANDOUTS_ENDPOINT}/{handout_id}")
+        except Exception as e:
+            self.logger.warning(f"Não foi possível consultar o comunicado {handout_id}: {e}")
+            return None
+
+        if not isinstance(response, dict):
+            self.logger.warning(f"Resposta inesperada ao consultar o comunicado {handout_id}: {response}")
+            return None
+
+        data = response.get('data')
+        attributes = data.get('attributes') if isinstance(data, dict) else None
+        if not isinstance(attributes, dict):
+            self.logger.warning(f"Resposta sem 'data.attributes' ao consultar o comunicado {handout_id}: {response}")
+            return None
+
+        return attributes
+
+    def check_handout_created(self, handout_id: str) -> Optional[bool]:
+        """
+        Verifica se o job de criação do comunicado já terminou.
+
+        Retorna True (terminou), False (ainda em processamento) ou None quando
+        não é possível saber — porque HANDOUT_READY_FIELD não foi configurado,
+        porque a API não devolveu esse campo ou porque a consulta falhou.
+        """
+        if not HANDOUT_READY_FIELD:
+            return None
+
+        attributes = self._get_handout_attributes(handout_id)
+        if attributes is None:
+            return None
+
+        if HANDOUT_READY_FIELD not in attributes:
+            self.logger.warning(
+                f"A API não retornou o campo '{HANDOUT_READY_FIELD}' para o comunicado {handout_id}. "
+                f"Campos recebidos: {sorted(attributes.keys())}"
+            )
+            return None
+
+        return attributes[HANDOUT_READY_FIELD] in HANDOUT_READY_VALUES
+
+    def wait_for_handout_created(self, handout_id: str) -> Optional[bool]:
+        """
+        Aguarda o job de criação terminar, antes de aprovar.
+
+        Sempre respeita o piso de HANDOUT_CREATION_MIN_WAIT_SECONDS. Depois
+        dele, se houver como consultar o status, faz polling até o teto.
+
+        Retorna True (confirmado pronto), False (confirmado que ainda não está
+        pronto, estourou o teto) ou None (sem como confirmar — só o piso foi
+        aguardado).
+        """
+        time.sleep(HANDOUT_CREATION_MIN_WAIT_SECONDS)
+
+        if not HANDOUT_READY_FIELD:
+            return None
+
+        limite = time.monotonic() + HANDOUT_CREATION_MAX_WAIT_SECONDS
+        conseguiu_consultar = False
+
+        while True:
+            status = self.check_handout_created(handout_id)
+            if status is True:
+                return True
+            if status is False:
+                conseguiu_consultar = True
+            if time.monotonic() >= limite:
+                break
+            self.logger.info(f"Comunicado {handout_id} ainda em processamento. Aguardando para aprovar...")
+            time.sleep(HANDOUT_CREATION_POLL_INTERVAL_SECONDS)
+
+        return False if conseguiu_consultar else None
 
     def verify_handout(self, student_id: str, student_name: str, handout_id: str) -> Tuple[str, str, str, str]:
         """
