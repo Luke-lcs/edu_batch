@@ -19,11 +19,18 @@ VALID_ATTACHMENT_EXTENSIONS = ('.pdf', '.png', '.jpeg', '.jpg')
 VALID_COVER_IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png')
 REQUEST_TIMEOUT_SECONDS = 30
 API_RETRY_DELAY_SECONDS = 2
+API_MAX_RETRIES = 3  # Tentativas por requisição (só retenta quando é seguro; ver ApiClient)
+
+# Autenticação
+# Margem para renovar o token antes de expirar. Precisa ser maior que
+# REQUEST_TIMEOUT_SECONDS, senão um upload longo pode começar com token válido
+# e terminar com token expirado (401).
+TOKEN_EXPIRY_BUFFER_SECONDS = 120
 
 # Performance configurations
-MAX_CONCURRENT_THREADS = 10  # Número máximo de threads simultâneas
-HANDOUT_STATUS_CHECK_ATTEMPTS = 5  # Tentativas para verificar status do comunicado
-HANDOUT_STATUS_CHECK_DELAY = 0.5  # Delay entre verificações de status (segundos)
+MAX_CONCURRENT_THREADS = 4  # Número máximo de threads simultâneas
+HANDOUT_STATUS_CHECK_ATTEMPTS = 8  # Tentativas para verificar status do comunicado
+HANDOUT_STATUS_CHECK_DELAY = 1.0  # Delay entre verificações de status (segundos)
 
 # CSV headers
 CSV_ERROR_HEADER = ["ID", "Status"]
