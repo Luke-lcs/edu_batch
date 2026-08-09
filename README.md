@@ -116,5 +116,34 @@ python main.py map-rename --csv files_to_send.csv
 - **Arquivo não encontrado**: Certifique-se de que o arquivo na pasta `attachment_files` tem **exatamente** o ID do aluno como nome (ex: `10.pdf` para o aluno de ID 10).
 - **Rate Limit**: Se houver muitos erros de conexão, tente reduzir o número de threads no arquivo `config.py` (`MAX_CONCURRENT_THREADS`).
 
+## ⚙️ Configurações avançadas (`config.py`)
+
+- `MAX_CONCURRENT_THREADS`: Número de envios simultâneos. Comece baixo e aumente conforme a API suportar.
+- `API_MAX_RETRIES`: Tentativas por requisição. Retentativas só ocorrem quando são seguras (ver abaixo).
+- `MAX_FILE_SIZE_BYTES`: Tamanho máximo de cada anexo (padrão 100MB).
+- `REQUEST_TIMEOUT_SECONDS`: Timeout das requisições. Aumente se ocorrerem erros de `Read timed out` em rede lenta ou com arquivos muito grandes.
+- `TOKEN_EXPIRY_BUFFER_SECONDS`: Margem de segurança para renovar o token antes de expirar. Deve ser maior que `REQUEST_TIMEOUT_SECONDS`.
+- `HANDOUT_STATUS_CHECK_ATTEMPTS` / `HANDOUT_STATUS_CHECK_DELAY`: Tentativas e intervalo da verificação de que o comunicado ficou pronto após a aprovação.
+- `VALID_ATTACHMENT_EXTENSIONS` / `VALID_COVER_IMAGE_EXTENSIONS`: Extensões permitidas.
+
+### Política de retentativas
+
+Para nunca gerar comunicado duplicado, a retentativa automática segue estas regras:
+
+| Situação | GET / PATCH | POST (criação do comunicado) |
+| --- | --- | --- |
+| HTTP 429 (rate limit) | Retenta (respeita `Retry-After`) | Retenta (a requisição foi recusada, não processada) |
+| HTTP 5xx | Retenta | **Não** retenta — o servidor pode ter criado o comunicado |
+| Timeout de conexão | Retenta | Retenta (a conexão nem foi estabelecida) |
+| Demais falhas de rede | Retenta | **Não** retenta |
+
+Antes de cada retentativa os anexos são rebobinados (`seek(0)`) e o token de autenticação é revalidado.
+
+## Contribuindo
+
+Contribuições são bem-vindas! Se tiver sugestões de melhoria ou encontrar um bug, abra uma issue ou envie um pull request.
+
 ---
 Desenvolvido para otimizar a operação da Agenda Edu.
+
+**Copyright (C) 2025 Lucas Monteiro**
