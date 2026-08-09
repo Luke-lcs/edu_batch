@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterator, Optional
 from api_auth import Authenticator
 from config import BASE_URL_API, REQUEST_TIMEOUT_SECONDS, API_MAX_RETRIES
 from logging_config import get_logger
+from rate_limiter import api_rate_limiter
 
 # Métodos cuja repetição não muda o resultado no servidor. Só eles podem ser
 # retentados depois que a requisição chegou a ser processada.
@@ -126,6 +127,10 @@ class ApiClient:
                 raise ConnectionError(message)
 
             headers = self._build_headers(files, json_data)
+
+            # Vale para toda requisição, inclusive retentativas e verificações
+            # de status — tudo conta para o limite de rps da API.
+            api_rate_limiter.acquire()
 
             try:
                 response = self._session.request(

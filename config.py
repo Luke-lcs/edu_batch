@@ -12,6 +12,7 @@ ADDITIONAL_FILES_DIR = './additional_files'
 COVER_IMAGE_DIR = './cover_image'
 LOG_ERROR_FILE = 'Erros.csv'
 LOG_SUCCESS_FILE = 'Comunicados_Enviados.csv'
+LOG_VERIFY_FILE = 'Verificacao.csv'
 
 # Limits and defaults
 MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB
@@ -28,10 +29,14 @@ API_MAX_RETRIES = 3  # Tentativas por requisição (só retenta quando é seguro
 TOKEN_EXPIRY_BUFFER_SECONDS = 120
 
 # Performance configurations
-MAX_CONCURRENT_THREADS = 4  # Número máximo de threads simultâneas
-HANDOUT_STATUS_CHECK_ATTEMPTS = 8  # Tentativas para verificar status do comunicado
-HANDOUT_STATUS_CHECK_DELAY = 1.0  # Delay entre verificações de status (segundos)
+# A Agenda Edu recomenda no máximo 10 requisições por segundo. O limite é de
+# vazão, não de concorrência: quem garante o teto é o RateLimiter, e as threads
+# só definem quantos envios ficam em voo enquanto se espera a resposta.
+# Mantido abaixo de 10 para deixar folga.
+API_MAX_REQUESTS_PER_SECOND = 8.0
+MAX_CONCURRENT_THREADS = 10  # Número máximo de threads simultâneas
 
 # CSV headers
 CSV_ERROR_HEADER = ["ID", "Status"]
 CSV_SUCCESS_HEADER = ["ID do Aluno", "Nome do Aluno", "ID do Comunicado"]
+CSV_VERIFY_HEADER = ["ID do Aluno", "Nome do Aluno", "ID do Comunicado", "Situação"]

@@ -6,6 +6,7 @@ from config import (
     TOKEN_EXPIRY_BUFFER_SECONDS
 )
 from logging_config import get_logger
+from rate_limiter import api_rate_limiter
 
 class Authenticator:
     def __init__(self, client_id: str, client_secret: str):
@@ -30,6 +31,7 @@ class Authenticator:
 
         try:
             self.logger.info("Solicitando novo token de acesso à API...")
+            api_rate_limiter.acquire()
             response = requests.post(url, headers=headers, data=data, timeout=REQUEST_TIMEOUT_SECONDS)
             response.raise_for_status()
 

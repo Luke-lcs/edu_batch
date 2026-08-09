@@ -1,4 +1,3 @@
-import time
 import os
 from typing import Dict, Optional, Tuple
 from api_client import ApiClient
@@ -6,8 +5,7 @@ from file_manager import FileManager
 from logging_config import get_logger
 from config import (
     HANDOUT_CATEGORIES_ENDPOINT, STUDENT_PROFILES_ENDPOINT,
-    HANDOUTS_ENDPOINT,
-    HANDOUT_STATUS_CHECK_ATTEMPTS, HANDOUT_STATUS_CHECK_DELAY
+    HANDOUTS_ENDPOINT
 )
 
 # Campos que a API deve devolver para que o status do comunicado seja verificável.
@@ -195,28 +193,6 @@ class HandoutService:
 
         return bool(attributes.get('approved', False)) and bool(attributes.get('visible', False))
 
-    def wait_for_handout_ready(self, handout_id: str, max_attempts: int = HANDOUT_STATUS_CHECK_ATTEMPTS,
-                               delay: float = HANDOUT_STATUS_CHECK_DELAY) -> Optional[bool]:
-        """
-        Aguarda até que o comunicado esteja pronto na plataforma.
-
-        Retorna True (pronto), False (verificado, mas não ficou pronto a tempo)
-        ou None (não foi possível verificar em nenhuma tentativa).
-        """
-        checked_at_least_once = False
-
-        for attempt in range(max_attempts):
-            status = self.check_handout_status(handout_id)
-            if status is True:
-                return True
-            if status is False:
-                checked_at_least_once = True
-            if attempt < max_attempts - 1:
-                self.logger.info(f"Aguardando comunicado ficar pronto... Tentativa {attempt + 1}/{max_attempts}")
-                time.sleep(delay)
-
-        return False if checked_at_least_once else None
-
     def process_student_handout(self, student_id: str, title: str, description: str,
                                 send_to: str, category_id: str, cover_image_path: Optional[str]) -> bool:
         """Processa o comunicado de um aluno. Retorna True apenas se o envio foi concluído."""
@@ -249,18 +225,25 @@ class HandoutService:
             self.file_manager.log_error(student_id, f"Falha ao aprovar o comunicado ID: {handout_id} (Nome: {student_name})")
             return False
 
-        ready = self.wait_for_handout_ready(handout_id)
-        if ready is False:
-            self.file_manager.log_error(student_id, f"Comunicado ID: {handout_id} não ficou pronto após aprovação (Nome: {student_name})")
-            return False
-
-        if ready is None:
-            # O comunicado foi criado e aprovado; só a confirmação falhou.
-            # Registrar como erro aqui esconderia envios que de fato ocorreram.
-            self.logger.warning(
-                f"Não foi possível confirmar na API que o comunicado {handout_id} ficou pronto "
-                f"(aluno {student_id} - {student_name}). Registrando como enviado; confira na plataforma."
-            )
-
+        # O envio termina aqui de propósito. A publicação do comunicado é feita
+        # em background pela Agenda Edu (Sidekiq), com tempo de fila variável:
+        # esperar por ela dentro do lote atrasaria o envio, consumiria o
+        # orçamento de rps com polling e marcaria como falha um comunicado que
+        # só está na fila. A confirmação fica a cargo do comando `verify`.
         self.file_manager.log_success(student_id, student_name, handout_id)
         return True
+
+    def verify_handout(self, student_id: str, student_name: str, handout_id: str) -> Tuple[str, str, str, str]:
+        """
+        Confere na API se um comunicado já foi publicado.
+
+        Retorna a linha do relatório: (id do aluno, nome, id do comunicado, status).
+        """
+        status = self.check_handout_status(handout_id)
+        if status is True:
+            situacao = 'Publicado'
+        elif status is False:
+            situacao = 'Pendente (em processamento)'
+        else:
+            situacao = 'Não foi possível verificar'
+        return student_id, student_name, handout_id, situacao

@@ -5,10 +5,10 @@ from typing import List, Tuple, Optional
 from logging_config import get_logger
 from config import (
     ATTACHMENT_FILES_DIR, ADDITIONAL_FILES_DIR, COVER_IMAGE_DIR,
-    LOG_ERROR_FILE, LOG_SUCCESS_FILE,
+    LOG_ERROR_FILE, LOG_SUCCESS_FILE, LOG_VERIFY_FILE,
     MAX_FILE_SIZE_BYTES, VALID_ATTACHMENT_EXTENSIONS,
     VALID_COVER_IMAGE_EXTENSIONS,
-    CSV_ERROR_HEADER, CSV_SUCCESS_HEADER
+    CSV_ERROR_HEADER, CSV_SUCCESS_HEADER, CSV_VERIFY_HEADER
 )
 
 class FileManager:
@@ -18,6 +18,7 @@ class FileManager:
         self.cover_image_dir = COVER_IMAGE_DIR
         self.error_log_file = LOG_ERROR_FILE
         self.success_log_file = LOG_SUCCESS_FILE
+        self.verify_report_file = LOG_VERIFY_FILE
         self._lock = threading.Lock()  # Lock para operações thread-safe
         self.logger = get_logger()
         self._ensure_directories_exist()
@@ -163,6 +164,48 @@ class FileManager:
     def initialize_log_files(self):
         self._prepare_csv_file(self.error_log_file, CSV_ERROR_HEADER)
         self._prepare_csv_file(self.success_log_file, CSV_SUCCESS_HEADER)
+
+    def read_sent_handouts(self) -> List[Tuple[str, str, str]]:
+        """Lê o log de envios. Retorna (id do aluno, nome, id do comunicado)."""
+        registros = []
+        if not os.path.exists(self.success_log_file):
+            self.logger.error(f"Log de envios '{self.success_log_file}' não encontrado. Rode o envio antes de verificar.")
+            return registros
+
+        try:
+            with open(self.success_log_file, mode='r', newline='', encoding='utf-8') as file:
+                reader = csv.DictReader(file)
+                faltando = [c for c in CSV_SUCCESS_HEADER if c not in (reader.fieldnames or [])]
+                if faltando:
+                    self.logger.error(
+                        f"'{self.success_log_file}' não tem as colunas {faltando}. Colunas encontradas: {reader.fieldnames}"
+                    )
+                    return registros
+
+                for row in reader:
+                    handout_id = (row.get("ID do Comunicado") or "").strip()
+                    if not handout_id:
+                        continue
+                    registros.append((
+                        (row.get("ID do Aluno") or "").strip(),
+                        (row.get("Nome do Aluno") or "").strip(),
+                        handout_id
+                    ))
+        except IOError as e:
+            self.logger.error(f"Erro ao ler o log de envios '{self.success_log_file}': {e}")
+
+        return registros
+
+    def write_verify_report(self, linhas: List[Tuple[str, str, str, str]]):
+        """Grava o relatório de verificação, substituindo o anterior."""
+        try:
+            with open(self.verify_report_file, mode='w', newline='', encoding='utf-8') as file:
+                writer = csv.writer(file)
+                writer.writerow(CSV_VERIFY_HEADER)
+                writer.writerows(linhas)
+            self.logger.info(f"Relatório de verificação gravado em '{self.verify_report_file}'.")
+        except IOError as e:
+            self.logger.error(f"Erro ao gravar o relatório de verificação '{self.verify_report_file}': {e}")
 
     def log_error(self, student_id: str, status: str):
         self.logger.error(f"Erro [Aluno: {student_id}]: {status}")

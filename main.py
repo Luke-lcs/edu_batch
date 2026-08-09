@@ -5,7 +5,7 @@ from api_client import ApiClient
 from file_manager import FileManager
 from handout_service import HandoutService
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from config import MAX_CONCURRENT_THREADS
+from config import MAX_CONCURRENT_THREADS, API_MAX_REQUESTS_PER_SECOND
 from logging_config import setup_logging
 import utils
 from tqdm import tqdm
@@ -120,6 +120,66 @@ def command_send():
     print("\n--- Processamento Concluído ---")
     print(f"Sucessos: {envios_sucesso}, Falhas: {envios_falha}")
     print(f"Verifique os arquivos '{file_mgr.success_log_file}' e '{file_mgr.error_log_file}' para o status detalhado de cada envio.")
+    if envios_sucesso:
+        print("\nOs comunicados são publicados em background pela Agenda Edu e podem levar")
+        print("alguns minutos para aparecer. Rode 'python main.py verify' mais tarde para")
+        print("confirmar quais já foram publicados.")
+
+
+def command_verify():
+    print("=== Verificação de Comunicados Enviados ===\n")
+
+    file_mgr = FileManager()
+
+    registros = file_mgr.read_sent_handouts()
+    if not registros:
+        print("Nenhum comunicado registrado para verificar.")
+        return
+
+    print(f"{len(registros)} comunicados encontrados em '{file_mgr.success_log_file}'.")
+
+    credentials = user_interaction.get_credentials()
+    if not credentials:
+        return
+
+    authenticator = Authenticator(credentials["client_id"], credentials["client_secret"])
+    if not authenticator.try_auth():
+        print("Falha na autenticação. Verifique suas credenciais e tente novamente.")
+        return
+
+    handout_svc = HandoutService(ApiClient(authenticator, credentials["x_school_token"]), file_mgr)
+
+    max_workers = min(MAX_CONCURRENT_THREADS, len(registros))
+    print(f"\nVerificando com {max_workers} threads (limite de {API_MAX_REQUESTS_PER_SECOND:.0f} req/s)...\n")
+
+    linhas = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(handout_svc.verify_handout, student_id, student_name, handout_id)
+            for student_id, student_name, handout_id in registros
+        ]
+
+        with tqdm(total=len(registros), desc="Verificando comunicados", unit="comunicado") as pbar:
+            for future in as_completed(futures):
+                try:
+                    linhas.append(future.result())
+                except Exception as e:
+                    tqdm.write(f"Erro inesperado durante a verificação: {e}")
+                finally:
+                    pbar.update(1)
+
+    linhas.sort(key=lambda linha: linha[0])
+    file_mgr.write_verify_report(linhas)
+
+    publicados = sum(1 for linha in linhas if linha[3] == 'Publicado')
+    pendentes = sum(1 for linha in linhas if linha[3].startswith('Pendente'))
+    indefinidos = len(linhas) - publicados - pendentes
+
+    print("\n--- Verificação Concluída ---")
+    print(f"Publicados: {publicados}, Pendentes: {pendentes}, Não verificados: {indefinidos}")
+    print(f"Relatório detalhado em '{file_mgr.verify_report_file}'.")
+    if pendentes:
+        print("Comunicados pendentes ainda estão na fila de processamento. Rode o verify novamente mais tarde.")
 
 def main():
     setup_logging()
@@ -129,6 +189,9 @@ def main():
 
     # Comando: send (padrão)
     parser_send = subparsers.add_parser("send", help="Enviar comunicados em lote")
+
+    # Comando: verify
+    parser_verify = subparsers.add_parser("verify", help="Conferir na API quais comunicados enviados já foram publicados")
 
     # Comando: rename
     parser_rename = subparsers.add_parser("rename", help="Renomear arquivos removendo sufixos (ex: '123 - Nome' -> '123')")
@@ -149,6 +212,8 @@ def main():
 
     if args.command == "send" or args.command is None:
         command_send()
+    elif args.command == "verify":
+        command_verify()
     elif args.command == "rename":
         utils.rename_files_in_directory(args.dir)
     elif args.command == "map-rename":

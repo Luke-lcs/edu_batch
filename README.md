@@ -72,7 +72,25 @@ python main.py
 3. Escolha a Categoria e o Público Alvo (Alunos/Responsáveis).
 4. Confirme o envio.
 
-### 2. Limpar Arquivos Enviados (`cleanup`)
+O comando termina quando os comunicados foram criados e aprovados. A **publicação
+é feita em background pela Agenda Edu**, com tempo de fila variável — por isso o
+envio não espera por ela. Use o `verify` depois para confirmar.
+
+### 2. Verificar Publicação (`verify`)
+Relê o `Comunicados_Enviados.csv` e consulta na API quais comunicados já foram
+publicados. Pode ser rodado quantas vezes quiser, até que não sobrem pendentes.
+
+```bash
+python main.py verify
+```
+
+Gera o `Verificacao.csv` com uma linha por comunicado e uma destas situações:
+
+- **Publicado**: já está visível na plataforma.
+- **Pendente (em processamento)**: ainda na fila de background. Rode de novo mais tarde.
+- **Não foi possível verificar**: a consulta falhou ou a resposta veio fora do formato esperado. Não significa que o envio falhou.
+
+### 3. Limpar Arquivos Enviados (`cleanup`)
 Remove da pasta de anexos os arquivos que foram enviados com sucesso (baseado no log `Comunicados_Enviados.csv`). Útil para liberar espaço ou preparar o próximo lote.
 
 ```bash
@@ -83,14 +101,14 @@ python main.py cleanup --dry-run
 python main.py cleanup
 ```
 
-### 3. Renomear Arquivos (`rename`)
+### 4. Renomear Arquivos (`rename`)
 Remove sufixos de nomes de arquivos. Útil se você baixou arquivos com nomes como `12345 - Nome do Aluno.pdf` e precisa deixá-los apenas como `12345.pdf`.
 
 ```bash
 python main.py rename --dir files_to_send
 ```
 
-### 4. Renomear via Mapeamento (`map-rename`)
+### 5. Renomear via Mapeamento (`map-rename`)
 Renomeia arquivos baseando-se em um CSV "De/Para". Útil quando o arquivo tem um ID externo e você precisa converter para o ID do aluno na Agenda Edu.
 
 **Formato do CSV (`files_to_send.csv`):**
@@ -107,23 +125,25 @@ python main.py map-rename --csv files_to_send.csv
 ## 📊 Logs e Monitoramento
 
 - **`app.log`**: Log técnico detalhado. Verifique aqui se algo der errado (erros de conexão, falhas de API).
-- **`Comunicados_Enviados.csv`**: Lista de envios bem sucedidos. Colunas: `ID do Aluno`, `Nome`, `ID do Comunicado`.
-- **`Erros.csv`**: Lista de falhas. Colunas: `ID`, `Status/Erro`.
+- **`Comunicados_Enviados.csv`**: Lista de comunicados criados e aprovados. Colunas: `ID do Aluno`, `Nome`, `ID do Comunicado`.
+- **`Erros.csv`**: Lista de falhas, incluindo anexos descartados na varredura (extensão inválida, tamanho acima do limite, ID não numérico). Colunas: `ID`, `Status/Erro`.
+- **`Verificacao.csv`**: Gerado pelo `verify`. Colunas: `ID do Aluno`, `Nome`, `ID do Comunicado`, `Situação`.
 
 ## 🛠️ Resolução de Problemas comum
 
 - **Erro de Autenticação**: Verifique se o token expirou ou se as credenciais estão corretas. O sistema tenta renovar automaticamente, mas credenciais inválidas falharão imediatamente.
 - **Arquivo não encontrado**: Certifique-se de que o arquivo na pasta `attachment_files` tem **exatamente** o ID do aluno como nome (ex: `10.pdf` para o aluno de ID 10).
-- **Rate Limit**: Se houver muitos erros de conexão, tente reduzir o número de threads no arquivo `config.py` (`MAX_CONCURRENT_THREADS`).
+- **Rate Limit**: A vazão é limitada por `API_MAX_REQUESTS_PER_SECOND` (não pelo número de threads). Se ainda houver erros 429, reduza esse valor.
+- **Comunicado não aparece na plataforma**: A publicação é assíncrona. Rode `python main.py verify` para ver se ainda está na fila de processamento.
 
 ## ⚙️ Configurações avançadas (`config.py`)
 
-- `MAX_CONCURRENT_THREADS`: Número de envios simultâneos. Comece baixo e aumente conforme a API suportar.
+- `API_MAX_REQUESTS_PER_SECOND`: Teto de vazão contra a API (padrão `8.0`). A Agenda Edu recomenda no máximo 10 req/s **por token de escola**; o padrão deixa folga. Se outras integrações suas consumirem a mesma cota, reduza.
+- `MAX_CONCURRENT_THREADS`: Quantos envios ficam em voo ao mesmo tempo. **Não** controla a vazão — quem garante o teto de req/s é o `RateLimiter`. Serve para aproveitar o tempo de espera das respostas.
 - `API_MAX_RETRIES`: Tentativas por requisição. Retentativas só ocorrem quando são seguras (ver abaixo).
 - `MAX_FILE_SIZE_BYTES`: Tamanho máximo de cada anexo (padrão 100MB).
 - `REQUEST_TIMEOUT_SECONDS`: Timeout das requisições. Aumente se ocorrerem erros de `Read timed out` em rede lenta ou com arquivos muito grandes.
 - `TOKEN_EXPIRY_BUFFER_SECONDS`: Margem de segurança para renovar o token antes de expirar. Deve ser maior que `REQUEST_TIMEOUT_SECONDS`.
-- `HANDOUT_STATUS_CHECK_ATTEMPTS` / `HANDOUT_STATUS_CHECK_DELAY`: Tentativas e intervalo da verificação de que o comunicado ficou pronto após a aprovação.
 - `VALID_ATTACHMENT_EXTENSIONS` / `VALID_COVER_IMAGE_EXTENSIONS`: Extensões permitidas.
 
 ### Política de retentativas
@@ -137,7 +157,7 @@ Para nunca gerar comunicado duplicado, a retentativa automática segue estas reg
 | Timeout de conexão | Retenta | Retenta (a conexão nem foi estabelecida) |
 | Demais falhas de rede | Retenta | **Não** retenta |
 
-Antes de cada retentativa os anexos são rebobinados (`seek(0)`) e o token de autenticação é revalidado.
+Antes de cada retentativa os anexos são rebobinados (`seek(0)`) e o token de autenticação é revalidado. Toda requisição — inclusive retentativas, autenticação e verificações de status — passa pelo limitador de vazão.
 
 ## Contribuindo
 
