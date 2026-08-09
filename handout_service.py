@@ -1,20 +1,24 @@
 import time
 import os
-import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from api_client import ApiClient
 from file_manager import FileManager
+from logging_config import get_logger
 from config import (
     HANDOUT_CATEGORIES_ENDPOINT, STUDENT_PROFILES_ENDPOINT,
-    HANDOUTS_ENDPOINT, API_RETRY_DELAY_SECONDS,
+    HANDOUTS_ENDPOINT,
     HANDOUT_STATUS_CHECK_ATTEMPTS, HANDOUT_STATUS_CHECK_DELAY
 )
+
+# Campos que a API deve devolver para que o status do comunicado seja verificável.
+HANDOUT_STATUS_FIELDS = frozenset({'approved', 'visible'})
+
 
 class HandoutService:
     def __init__(self, api_client: ApiClient, file_manager: FileManager):
         self.api_client = api_client
         self.file_manager = file_manager
-        self.logger = logging.getLogger('EduBatch')
+        self.logger = get_logger()
 
     def list_categories(self) -> Optional[Dict]:
         self.logger.info("Buscando categorias de comunicados...")
@@ -154,56 +158,79 @@ class HandoutService:
             self.logger.error(f"Exceção inesperada ao aprovar comunicado {handout_id}: {e}")
             return False
 
-    def check_handout_status(self, handout_id: str) -> bool:
+    def check_handout_status(self, handout_id: str) -> Optional[bool]:
         """
-        Verifica se o comunicado está visível e pronto na plataforma.
-        Retorna True se o comunicado estiver pronto, False caso contrário.
+        Verifica se o comunicado está aprovado e visível na plataforma.
+
+        Retorna True (pronto), False (ainda não ficou pronto) ou None quando não
+        foi possível verificar — resposta fora do formato esperado ou falha na
+        consulta. O None é o que impede que uma mudança no contrato da API
+        transforme todo envio bem-sucedido em erro no relatório.
         """
         self.logger.info(f"Verificando status do comunicado {handout_id}...")
         endpoint = f"{HANDOUTS_ENDPOINT}/{handout_id}"
 
         try:
             response = self.api_client.get(endpoint)
-            if response and isinstance(response, dict):
-                data = response.get('data', {})
-                attributes = data.get('attributes', {})
-
-                is_approved = attributes.get('approved', False)
-                is_visible = attributes.get('visible', False)
-
-                return is_approved and is_visible
-            return False
         except Exception as e:
-            self.logger.error(f"Erro ao verificar status do comunicado {handout_id}: {e}")
-            return False
+            self.logger.warning(f"Não foi possível verificar o status do comunicado {handout_id}: {e}")
+            return None
 
-    def wait_for_handout_ready(self, handout_id: str, max_attempts: int = HANDOUT_STATUS_CHECK_ATTEMPTS, delay: int = HANDOUT_STATUS_CHECK_DELAY) -> bool:
+        if not isinstance(response, dict):
+            self.logger.warning(f"Resposta inesperada ao verificar o comunicado {handout_id}: {response}")
+            return None
+
+        data = response.get('data')
+        attributes = data.get('attributes') if isinstance(data, dict) else None
+        if not isinstance(attributes, dict):
+            self.logger.warning(f"Resposta sem 'data.attributes' ao verificar o comunicado {handout_id}: {response}")
+            return None
+
+        if not HANDOUT_STATUS_FIELDS.intersection(attributes.keys()):
+            self.logger.warning(
+                f"A API não retornou os campos {sorted(HANDOUT_STATUS_FIELDS)} para o comunicado {handout_id}. "
+                f"Não é possível confirmar o status. Campos recebidos: {sorted(attributes.keys())}"
+            )
+            return None
+
+        return bool(attributes.get('approved', False)) and bool(attributes.get('visible', False))
+
+    def wait_for_handout_ready(self, handout_id: str, max_attempts: int = HANDOUT_STATUS_CHECK_ATTEMPTS,
+                               delay: float = HANDOUT_STATUS_CHECK_DELAY) -> Optional[bool]:
         """
         Aguarda até que o comunicado esteja pronto na plataforma.
-        Versão otimizada com configurações personalizáveis.
+
+        Retorna True (pronto), False (verificado, mas não ficou pronto a tempo)
+        ou None (não foi possível verificar em nenhuma tentativa).
         """
+        checked_at_least_once = False
+
         for attempt in range(max_attempts):
-            if self.check_handout_status(handout_id):
+            status = self.check_handout_status(handout_id)
+            if status is True:
                 return True
+            if status is False:
+                checked_at_least_once = True
             if attempt < max_attempts - 1:
                 self.logger.info(f"Aguardando comunicado ficar pronto... Tentativa {attempt + 1}/{max_attempts}")
                 time.sleep(delay)
-        return False
+
+        return False if checked_at_least_once else None
 
     def process_student_handout(self, student_id: str, title: str, description: str,
-                                send_to: str, category_id: str, cover_image_path: Optional[str]):
-        self.logger.info(f"\n--- Iniciando processamento para o aluno {student_id} ---")
+                                send_to: str, category_id: str, cover_image_path: Optional[str]) -> bool:
+        """Processa o comunicado de um aluno. Retorna True apenas se o envio foi concluído."""
+        self.logger.info(f"--- Iniciando processamento para o aluno {student_id} ---")
 
         student_info = self.get_student_classroom_info(student_id)
         if not student_info or student_info[1] is None:
-            student_name_for_log = student_info[0] if student_info else "ID:" + student_id
             error_msg = "Aluno não encontrado na API ou sem sala de aula associada."
             if student_info and student_info[1] is None:
                 error_msg = f"Aluno '{student_info[0]}' encontrado, mas não está associado a nenhuma sala de aula."
 
             self.logger.error(error_msg)
             self.file_manager.log_error(student_id, error_msg)
-            return
+            return False
 
         student_name: str = student_info[0]
         classroom_id: int = student_info[1]
@@ -214,12 +241,26 @@ class HandoutService:
             student_id, classroom_id, title, description,
             send_to, category_id, cover_image_path
         )
+        if not handout_id:
+            # create_handout já registrou o motivo em Erros.csv.
+            return False
 
-        if handout_id:
-            if self.approve_handout(handout_id):
-                if self.wait_for_handout_ready(handout_id):
-                    self.file_manager.log_success(student_id, student_name, handout_id)
-                else:
-                    self.file_manager.log_error(student_id, f"Comunicado ID: {handout_id} não ficou pronto após aprovação (Nome: {student_name})")
-            else:
-                self.file_manager.log_error(student_id, f"Falha ao aprovar o comunicado ID: {handout_id} (Nome: {student_name})")
+        if not self.approve_handout(handout_id):
+            self.file_manager.log_error(student_id, f"Falha ao aprovar o comunicado ID: {handout_id} (Nome: {student_name})")
+            return False
+
+        ready = self.wait_for_handout_ready(handout_id)
+        if ready is False:
+            self.file_manager.log_error(student_id, f"Comunicado ID: {handout_id} não ficou pronto após aprovação (Nome: {student_name})")
+            return False
+
+        if ready is None:
+            # O comunicado foi criado e aprovado; só a confirmação falhou.
+            # Registrar como erro aqui esconderia envios que de fato ocorreram.
+            self.logger.warning(
+                f"Não foi possível confirmar na API que o comunicado {handout_id} ficou pronto "
+                f"(aluno {student_id} - {student_name}). Registrando como enviado; confira na plataforma."
+            )
+
+        self.file_manager.log_success(student_id, student_name, handout_id)
+        return True

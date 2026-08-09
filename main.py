@@ -1,13 +1,12 @@
 import argparse
-import sys
 import user_interaction
 from api_auth import Authenticator
 from api_client import ApiClient
 from file_manager import FileManager
 from handout_service import HandoutService
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 from config import MAX_CONCURRENT_THREADS
+from logging_config import setup_logging
 import utils
 from tqdm import tqdm
 
@@ -86,45 +85,35 @@ def command_send():
     envios_sucesso = 0
     envios_falha = 0
 
-    # Lock para operações thread-safe
-    lock = threading.Lock()
-
-    def process_student(student_id):
-        try:
-            handout_svc.process_student_handout(
+    # A contagem é feita aqui, na thread principal, a partir do retorno de
+    # process_student_handout — que trata as próprias exceções e sinaliza
+    # falha pelo valor de retorno, não levantando erro.
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_student = {
+            executor.submit(
+                handout_svc.process_student_handout,
                 student_id,
                 handout_details["title"],
                 handout_details["description"],
                 send_to_target,
                 selected_category_id,
                 cover_image_file_path
-            )
-            with lock:
-                nonlocal envios_sucesso
-                envios_sucesso += 1
-        except Exception as e:
-            print(f"Erro crítico não tratado ao processar o aluno {student_id}: {e}")
-            file_mgr.log_error(student_id, f"Erro crítico no processamento paralelo: {e}")
-            with lock:
-                nonlocal envios_falha
-                envios_falha += 1
-
-    # Executar processamento paralelo com progress bar
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submeter todas as tarefas
-        future_to_student = {
-            executor.submit(process_student, student_id): student_id
+            ): student_id
             for student_id in student_ids
         }
 
-        # Processar resultados conforme completam com barra de progresso
         with tqdm(total=len(student_ids), desc="Enviando comunicados", unit="aluno") as pbar:
             for future in as_completed(future_to_student):
                 student_id = future_to_student[future]
                 try:
-                    future.result()  # Isso vai capturar qualquer exceção
+                    if future.result():
+                        envios_sucesso += 1
+                    else:
+                        envios_falha += 1
                 except Exception as e:
-                    print(f"Erro inesperado no processamento do aluno {student_id}: {e}")
+                    tqdm.write(f"Erro crítico não tratado ao processar o aluno {student_id}: {e}")
+                    file_mgr.log_error(student_id, f"Erro crítico no processamento paralelo: {e}")
+                    envios_falha += 1
                 finally:
                     pbar.update(1)
 
@@ -133,6 +122,8 @@ def command_send():
     print(f"Verifique os arquivos '{file_mgr.success_log_file}' e '{file_mgr.error_log_file}' para o status detalhado de cada envio.")
 
 def main():
+    setup_logging()
+
     parser = argparse.ArgumentParser(description="Edu Batch - Ferramenta de Automação Agenda Edu")
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponíveis")
 
