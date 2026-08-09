@@ -1,10 +1,13 @@
 import os
 import csv
-import glob
+
+from logging_config import get_logger
+
+logger = get_logger()
 
 def rename_files_in_directory(directory="files_to_send"):
     if not os.path.exists(directory):
-        print(f"Error: Directory '{directory}' does not exist.")
+        logger.error(f"Error: Directory '{directory}' does not exist.")
         return
 
     successful_renames = 0
@@ -22,27 +25,27 @@ def rename_files_in_directory(directory="files_to_send"):
                 new_path = os.path.join(directory, new_filename_with_ext)
 
                 os.rename(old_path, new_path)
-                print(f"Renamed: {filename} -> {new_filename_with_ext}")
+                logger.info(f"Renamed: {filename} -> {new_filename_with_ext}")
                 successful_renames += 1
             else:
-                print(f"Skipped: {filename} (no ' - ' found)")
+                logger.warning(f"Skipped: {filename} (no ' - ' found)")
                 failed_renames += 1
 
         except Exception as e:
-            print(f"Error renaming {filename}: {e}")
+            logger.error(f"Error renaming {filename}: {e}")
             failed_renames += 1
 
-    print("\nRename Summary:")
-    print(f"Successful renames: {successful_renames}")
-    print(f"Skipped files: {failed_renames}")
+    logger.info("Rename Summary:")
+    logger.info(f"Successful renames: {successful_renames}")
+    logger.info(f"Skipped files: {failed_renames}")
 
 def rename_files_with_csv(csv_path="./files_to_send.csv", directory="files_to_send"):
     if not os.path.exists(csv_path):
-        print(f"Error: CSV file '{csv_path}' does not exist.")
+        logger.error(f"Error: CSV file '{csv_path}' does not exist.")
         return
 
     if not os.path.exists(directory):
-        print(f"Error: Directory '{directory}' does not exist.")
+        logger.error(f"Error: Directory '{directory}' does not exist.")
         return
 
     id_mapping = {}
@@ -50,14 +53,14 @@ def rename_files_with_csv(csv_path="./files_to_send.csv", directory="files_to_se
         with open(csv_path, 'r', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             if 'ID' not in reader.fieldnames or 'EXTERNAL_ID' not in reader.fieldnames:
-                print("Error: CSV must contain 'ID' and 'EXTERNAL_ID' columns.")
+                logger.error("Error: CSV must contain 'ID' and 'EXTERNAL_ID' columns.")
                 return
             for row in reader:
                 external_id = row['EXTERNAL_ID'].strip()
                 new_id = row['ID'].strip()
                 id_mapping[external_id] = new_id
     except Exception as e:
-        print(f"Error reading CSV file: {e}")
+        logger.error(f"Error reading CSV file: {e}")
         return
 
     successful_renames = 0
@@ -74,19 +77,19 @@ def rename_files_with_csv(csv_path="./files_to_send.csv", directory="files_to_se
                 old_path = os.path.join(directory, filename)
                 new_path = os.path.join(directory, new_filename)
                 os.rename(old_path, new_path)
-                print(f"Renamed: {filename} -> {new_filename}")
+                logger.info(f"Renamed: {filename} -> {new_filename}")
                 successful_renames += 1
             else:
-                print(f"Skipped: {filename} (no matching EXTERNAL_ID found)")
+                logger.warning(f"Skipped: {filename} (no matching EXTERNAL_ID found)")
                 skipped_files += 1
         except Exception as e:
-            print(f"Error renaming {filename}: {e}")
+            logger.error(f"Error renaming {filename}: {e}")
             errors += 1
 
-    print("\nRename Summary:")
-    print(f"Successful renames: {successful_renames}")
-    print(f"Skipped files: {skipped_files}")
-    print(f"Errors: {errors}")
+    logger.info("Rename Summary:")
+    logger.info(f"Successful renames: {successful_renames}")
+    logger.info(f"Skipped files: {skipped_files}")
+    logger.error(f"Errors: {errors}")
 
 def delete_sent_files(csv_filepath, folder_path, dry_run=False):
     student_ids = set()
@@ -94,31 +97,31 @@ def delete_sent_files(csv_filepath, folder_path, dry_run=False):
         with open(csv_filepath, 'r', encoding='utf-8') as csvfile:
             csv_reader = csv.DictReader(csvfile)
             if "ID do Aluno" not in csv_reader.fieldnames:
-                print(f"CSV file is missing 'ID do Aluno' column. Available columns: {csv_reader.fieldnames}")
+                logger.error(f"CSV file is missing 'ID do Aluno' column. Available columns: {csv_reader.fieldnames}")
                 return
             for row in csv_reader:
                 student_id = row["ID do Aluno"].strip()
                 if student_id:
                     student_ids.add(student_id)
-        print(f"Read {len(student_ids)} unique student IDs from CSV")
+        logger.info(f"Read {len(student_ids)} unique student IDs from CSV")
     except FileNotFoundError:
-        print(f"Error: CSV file '{csv_filepath}' not found.")
+        logger.error(f"Error: CSV file '{csv_filepath}' not found.")
         return
     except Exception as e:
-        print(f"Error reading CSV file: {e}")
+        logger.error(f"Error reading CSV file: {e}")
         return
 
     if not student_ids:
-        print("No valid student IDs found in the CSV. Exiting.")
+        logger.info("No valid student IDs found in the CSV. Exiting.")
         return
 
     if dry_run:
-        print("\nDRY RUN - No files will be deleted")
-        print(f"\nFiles that would be deleted:")
+        logger.info("DRY RUN - No files will be deleted")
+        logger.info("Files that would be deleted:")
         for filename in os.listdir(folder_path):
             file_id = os.path.splitext(filename)[0]
             if file_id in student_ids:
-                print(f"  - {filename}")
+                logger.info(f"  - {filename}")
         return
 
     deleted_files = []
@@ -137,17 +140,17 @@ def delete_sent_files(csv_filepath, folder_path, dry_run=False):
                     deleted_files.append(filename)
                     if file_id in not_found_ids:
                         not_found_ids.remove(file_id)
-                    print(f"Deleted: {filename}")
+                    logger.info(f"Deleted: {filename}")
                 except Exception as e:
-                    print(f"Error deleting {filename}: {e}")
+                    logger.error(f"Error deleting {filename}: {e}")
 
-        print("\nSummary:")
-        print(f"- Total student IDs in CSV: {len(student_ids)}")
-        print(f"- Files deleted: {len(deleted_files)}")
+        logger.info("Summary:")
+        logger.info(f"- Total student IDs in CSV: {len(student_ids)}")
+        logger.info(f"- Files deleted: {len(deleted_files)}")
         if not_found_ids:
-            print(f"- Student IDs with no matching files: {len(not_found_ids)}")
+            logger.info(f"- Student IDs with no matching files: {len(not_found_ids)}")
 
     except FileNotFoundError:
-        print(f"Error: Folder '{folder_path}' not found.")
+        logger.error(f"Error: Folder '{folder_path}' not found.")
     except Exception as e:
-        print(f"Error processing files: {e}")
+        logger.error(f"Error processing files: {e}")
